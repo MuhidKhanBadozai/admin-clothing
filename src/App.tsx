@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db } from './firebase';
 import {
   collection,
@@ -22,12 +22,261 @@ import {
   Check,
   X,
   Search,
-  ExternalLink
+  ExternalLink,
+  Upload,
+  Download,
+  LogOut,
+  Lock,
+  Eye,
+  EyeOff,
+  User
 } from 'lucide-react';
 
+// ─── Hardcoded Credentials ───────────────────────────────────────────────────
+const ADMIN_USERNAME = 'danish';
+const ADMIN_PASSWORD = 'danish123';
+
+// ─── CSV Helpers ─────────────────────────────────────────────────────────────
+const CSV_HEADERS = [
+  'name','sku','category','gender','fabricTag','price','isOnSale',
+  'description','image_1','image_2','image_3','image_4','image_5',
+  'size_XS','size_S','size_M','size_L','size_XL'
+];
+
+function generateExampleCsv(): string {
+  const rows = [
+    CSV_HEADERS.join(','),
+    [
+      'Embroidered Lawn Suit',
+      'FAMA-2026-001',
+      'WOMEN',
+      'WOMEN',
+      'Lawn',
+      '4500',
+      'false',
+      'Beautiful embroidered lawn 3-piece suit',
+      'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?w=800',
+      'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800',
+      '', '', '',
+      '0','5','10','5','0'
+    ].join(','),
+    [
+      'Khaddar Winter Unstitched',
+      'FAMA-2026-002',
+      'UNSTITCHED FABRIC',
+      'WOMEN',
+      'Khaddar',
+      '3200',
+      'true',
+      'Warm khaddar unstitched fabric for winter',
+      'https://images.unsplash.com/photo-1567401893414-76b7b1e5a7a5?w=800',
+      '', '', '', '',
+      '0','0','5','5','2'
+    ].join(','),
+    [
+      'Men Kurta Classic White',
+      'FAMA-2026-003',
+      'MEN',
+      'MEN',
+      'Linen',
+      '2800',
+      'false',
+      'Classic white linen kurta for men',
+      'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=800',
+      '', '', '', '',
+      '0','3','8','6','2'
+    ].join(',')
+  ];
+  return rows.join('\n');
+}
+
+function parseCsvToProducts(csv: string): Omit<any, 'id'>[] {
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  const products: Omit<any, 'id'>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map(v => v.trim());
+    if (values.every(v => !v)) continue;
+    const row: Record<string, string> = {};
+    headers.forEach((h, idx) => { row[h] = values[idx] || ''; });
+    const sizes = (['XS','S','M','L','XL'] as const).map(sz => ({
+      size: sz,
+      stock: Number(row[`size_${sz}`]) || 0
+    }));
+    const images = [row.image_1, row.image_2, row.image_3, row.image_4, row.image_5]
+      .filter(Boolean);
+    products.push({
+      name: row.name || '',
+      sku: (row.sku || '').toUpperCase(),
+      category: row.category || 'READY TO WEAR',
+      gender: row.gender || 'WOMEN',
+      fabricTag: row.fabricTag || 'Lawn',
+      fabric: row.fabricTag || 'Lawn',
+      price: Number(row.price) || 0,
+      quantity: sizes.reduce((a, s) => a + s.stock, 0),
+      isOnSale: row.isOnSale?.toLowerCase() === 'true',
+      description: row.description || '',
+      images,
+      image: images[0] || '',
+      sizes,
+      createdAt: new Date().toISOString()
+    });
+  }
+  return products;
+}
+
+function exportItemsToCsv(items: any[]): string {
+  const rows = [CSV_HEADERS.join(',')];
+  for (const it of items) {
+    const imgs = Array.isArray(it.images) ? it.images : (it.image ? [it.image] : []);
+    const sizeMap: Record<string, number> = {};
+    (it.sizes || []).forEach((s: any) => { sizeMap[s.size] = s.stock || 0; });
+    rows.push([
+      `"${(it.name || '').replace(/"/g,'""')}"`,
+      it.sku || '',
+      it.category || '',
+      it.gender || 'WOMEN',
+      it.fabricTag || it.fabric || '',
+      it.price || 0,
+      it.isOnSale ? 'true' : 'false',
+      `"${(it.description || '').replace(/"/g,'""')}"`,
+      imgs[0] || '', imgs[1] || '', imgs[2] || '', imgs[3] || '', imgs[4] || '',
+      sizeMap['XS'] || 0, sizeMap['S'] || 0, sizeMap['M'] || 0, sizeMap['L'] || 0, sizeMap['XL'] || 0
+    ].join(','));
+  }
+  return rows.join('\n');
+}
+
+// ─── Login Screen ─────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError('');
+    await new Promise(r => setTimeout(r, 700)); // simulate auth
+    if (username.trim() === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      onLogin();
+    } else {
+      setError('Incorrect username or password. Please try again.');
+    }
+    setIsLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
+      {/* Background pattern */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-violet-600/10 rounded-full blur-3xl" />
+      </div>
+
+      <div className="relative w-full max-w-md">
+        {/* Logo card */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 shadow-xl shadow-indigo-900/50 mb-4">
+            <Package className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-3xl font-bold text-white tracking-tight">FAMMA</h1>
+          <p className="text-indigo-300/80 text-sm mt-1 font-medium">Admin Panel · Fashion for Every Moment</p>
+        </div>
+
+        {/* Login form card */}
+        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-8 shadow-2xl">
+          <div className="flex items-center gap-2 mb-6">
+            <Lock className="w-4 h-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-slate-200">Secure Admin Login</span>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Username</label>
+              <div className="relative">
+                <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => { setUsername(e.target.value); setError(''); }}
+                  className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  placeholder="Enter username"
+                  autoComplete="username"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">Password</label>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  type={showPass ? 'text' : 'password'}
+                  value={password}
+                  onChange={e => { setPassword(e.target.value); setError(''); }}
+                  className="w-full pl-9 pr-10 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  placeholder="Enter password"
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPass(p => !p)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition"
+                >
+                  {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs px-3 py-2 rounded-lg">
+                <X className="w-3.5 h-3.5 shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-lg text-sm transition-all shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2"
+            >
+              {isLoading ? (
+                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /><span>Authenticating...</span></>
+              ) : (
+                <><Lock className="w-4 h-4" /><span>Sign In</span></>
+              )}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-white/10">
+            <p className="text-center text-[11px] text-slate-500">FAMMA Admin Panel · Restricted Access Only</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const CATEGORIES = [
-  'NEW ARRIVALS', 'READY TO WEAR', 'UNSTITCHED FABRIC', 'SS WESST',
-  'KIDS', 'ACCESSORIES', 'COUTURE', 'BRIDAL', 'HOME'
+  'WOMEN', 'MEN', 'NEW ARRIVALS', 'READY TO WEAR', 'UNSTITCHED FABRIC', 'HOME'
+];
+
+export const FABRIC_TYPES = [
+  'Linen',
+  'Khaddar',
+  'Karandi',
+  'Marina',
+  'Jacquard',
+  'Pashmina',
+  'Wool',
+  'Printed silk',
+  'Lawn'
 ];
 
 const STANDARD_SIZES = ['XS', 'S', 'M', 'L', 'XL'] as const;
@@ -42,6 +291,9 @@ interface ProductItem {
   name: string;
   sku: string;
   category: string;
+  gender?: 'WOMEN' | 'MEN' | 'ALL' | string;
+  fabricTag?: string;
+  fabric?: string;
   price: number;
   quantity: number;
   image?: string;       // legacy cover
@@ -52,9 +304,81 @@ interface ProductItem {
 }
 
 export default function App() {
+  // ─── Auth Gate ───────────────────────────────────────────────────────────
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return sessionStorage.getItem('famma_admin_auth') === '1';
+  });
+
+  const handleLogin = () => {
+    sessionStorage.setItem('famma_admin_auth', '1');
+    setIsLoggedIn(true);
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('famma_admin_auth');
+    setIsLoggedIn(false);
+  };
+
+  // ─── CSV Import ──────────────────────────────────────────────────────────
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvStatus, setCsvStatus] = useState<string | null>(null);
+
+  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvImporting(true);
+    setCsvStatus(null);
+    try {
+      const text = await file.text();
+      const products = parseCsvToProducts(text);
+      if (products.length === 0) {
+        setCsvStatus('No valid rows found in CSV.');
+        return;
+      }
+      let imported = 0;
+      for (const p of products) {
+        await addDoc(collection(db, 'products'), p);
+        imported++;
+      }
+      setCsvStatus(`✅ Imported ${imported} product${imported !== 1 ? 's' : ''} successfully!`);
+      await fetchItems();
+    } catch (err) {
+      console.error(err);
+      setCsvStatus('❌ Import failed. Check console for details.');
+    } finally {
+      setCsvImporting(false);
+      if (csvInputRef.current) csvInputRef.current.value = '';
+    }
+  };
+
+  const handleCsvExport = () => {
+    const csv = exportItemsToCsv(items);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `famma-inventory-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadExampleCsv = () => {
+    const csv = generateExampleCsv();
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'famma-example-import.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const [items, setItems] = useState<ProductItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
+  const [selectedGenderFilter, setSelectedGenderFilter] = useState('ALL');
+  const [selectedFabricFilter, setSelectedFabricFilter] = useState('ALL');
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -63,6 +387,8 @@ export default function App() {
     name: '',
     sku: '',
     category: 'READY TO WEAR',
+    gender: 'WOMEN' as 'WOMEN' | 'MEN' | 'ALL',
+    fabricTag: 'Lawn',
     price: '',
     coverImage: '',
     extraImages: ['', '', '', ''] as string[],
@@ -140,6 +466,8 @@ export default function App() {
       name: '',
       sku: '',
       category: 'READY TO WEAR',
+      gender: 'WOMEN',
+      fabricTag: 'Lawn',
       price: '',
       coverImage: '',
       extraImages: ['', '', '', ''],
@@ -173,6 +501,9 @@ export default function App() {
       name: form.name.trim(),
       sku: form.sku.trim().toUpperCase(),
       category: form.category,
+      gender: form.gender,
+      fabricTag: form.fabricTag,
+      fabric: form.fabricTag,
       price: Number(form.price) || 0,
       quantity: totalCalculatedQuantity,
       image: form.coverImage.trim(),   // backward compat
@@ -214,10 +545,14 @@ export default function App() {
       cover = item.image;
     }
 
+    const itemGender = (item.gender || (item.category === 'MEN' ? 'MEN' : 'WOMEN')) as 'WOMEN' | 'MEN' | 'ALL';
+
     setForm({
       name: item.name || '',
       sku: item.sku || '',
       category: item.category || 'READY TO WEAR',
+      gender: itemGender,
+      fabricTag: item.fabricTag || item.fabric || 'Lawn',
       price: item.price ? String(item.price) : '',
       coverImage: cover,
       extraImages: extras,
@@ -276,7 +611,22 @@ export default function App() {
       matchesCat = it.category === selectedCategoryFilter;
     }
 
-    return matchesSearch && matchesCat;
+    let matchesFabric = true;
+    if (selectedFabricFilter !== 'ALL') {
+      const itemFab = (it.fabricTag || it.fabric || '').toLowerCase();
+      matchesFabric = itemFab.includes(selectedFabricFilter.toLowerCase());
+    }
+
+    let matchesGender = true;
+    if (selectedGenderFilter === 'WOMEN') {
+      matchesGender = it.gender === 'WOMEN' || it.gender === 'ALL' || it.category === 'WOMEN' || (!it.gender && it.category !== 'MEN');
+    } else if (selectedGenderFilter === 'MEN') {
+      matchesGender = it.gender === 'MEN' || it.gender === 'ALL' || it.category === 'MEN';
+    } else if (selectedGenderFilter === 'UNISEX') {
+      matchesGender = it.gender === 'ALL';
+    }
+
+    return matchesSearch && matchesCat && matchesFabric && matchesGender;
   });
 
   const totalCalculatedUnits = Object.entries(sizesState).reduce(
@@ -284,8 +634,20 @@ export default function App() {
     0
   );
 
+  // Auth gate — after all hooks
+  if (!isLoggedIn) return <LoginScreen onLogin={handleLogin} />;
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-16">
+      {/* Hidden CSV file input */}
+      <input
+        ref={csvInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={handleCsvImport}
+      />
+
       {/* Header Bar */}
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-xs">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
@@ -295,29 +657,85 @@ export default function App() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-slate-900">FAMA</h1>
+                <h1 className="text-xl font-bold tracking-tight text-slate-900">FAMMA</h1>
                 <span className="text-[11px] font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-200/60 uppercase tracking-wider">
                   Admin Panel
                 </span>
               </div>
-              <p className="text-xs text-slate-500">Inventory &amp; Product Catalog Manager</p>
+              <p className="text-xs text-slate-500">Inventory &amp; Product Catalog Manager · Fashion for Every Moment</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* CSV Status toast */}
+            {csvStatus && (
+              <span className={`text-xs font-medium px-3 py-1.5 rounded-lg border ${
+                csvStatus.startsWith('✅')
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-rose-50 text-rose-700 border-rose-200'
+              }`}>
+                {csvStatus}
+              </span>
+            )}
+
+            {/* Download Example CSV */}
+            <button
+              onClick={handleDownloadExampleCsv}
+              title="Download example CSV template"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-xs font-semibold text-violet-700 hover:bg-violet-100 transition-colors"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Example CSV</span>
+            </button>
+
+            {/* Import CSV */}
+            <button
+              onClick={() => csvInputRef.current?.click()}
+              disabled={csvImporting}
+              title="Import products from CSV file"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-60 transition-colors"
+            >
+              {csvImporting
+                ? <><div className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-700 rounded-full animate-spin" /><span>Importing...</span></>
+                : <><Upload className="w-3.5 h-3.5" /><span>Import CSV</span></>
+              }
+            </button>
+
+            {/* Export CSV */}
+            <button
+              onClick={handleCsvExport}
+              title="Export current inventory to CSV"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export CSV</span>
+            </button>
+
+            <div className="w-px h-6 bg-slate-200" />
+
             <div className="text-right hidden sm:block">
               <span className="text-xs text-slate-400 block font-medium">Total Products</span>
               <span className="text-sm font-bold text-slate-700">{items.length} SKUs</span>
             </div>
+
             <a
               href="http://localhost:5173"
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors"
             >
-              <span>Visit Website</span>
+              <span>Visit Site</span>
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
             </a>
+
+            <button
+              onClick={handleLogout}
+              title="Logout"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-600 hover:bg-rose-100 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
+            </button>
           </div>
         </div>
       </header>
@@ -389,6 +807,61 @@ export default function App() {
                 />
               </div>
 
+              {/* Audience / Gender Selection Buttons */}
+              <div className="md:col-span-2 bg-gradient-to-r from-slate-50 via-indigo-50/20 to-slate-50 p-4 rounded-xl border border-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-2.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Target Audience / Gender *
+                  </label>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    Choosing Men or Women makes this item appear under Men or Women on website
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, gender: 'WOMEN' })}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                      form.gender === 'WOMEN'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-md shadow-rose-200 ring-2 ring-rose-600/30'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">👩</span>
+                    <span>WOMEN</span>
+                    {form.gender === 'WOMEN' && <Check className="w-4 h-4 ml-1" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, gender: 'MEN' })}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                      form.gender === 'MEN'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200 ring-2 ring-indigo-600/30'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">👨</span>
+                    <span>MEN</span>
+                    {form.gender === 'MEN' && <Check className="w-4 h-4 ml-1" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, gender: 'ALL' })}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-xs font-bold transition-all border cursor-pointer ${
+                      form.gender === 'ALL'
+                        ? 'bg-slate-800 text-white border-slate-800 shadow-md ring-2 ring-slate-800/30'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="text-base">👥</span>
+                    <span>BOTH / UNISEX</span>
+                    {form.gender === 'ALL' && <Check className="w-4 h-4 ml-1" />}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Category *
@@ -396,9 +869,28 @@ export default function App() {
                 <select
                   className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition"
                   value={form.category}
-                  onChange={e => setForm({ ...form, category: e.target.value })}
+                  onChange={e => {
+                    const val = e.target.value;
+                    let g = form.gender;
+                    if (val === 'MEN') g = 'MEN';
+                    else if (val === 'WOMEN') g = 'WOMEN';
+                    setForm({ ...form, category: val, gender: g });
+                  }}
                 >
                   {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Fabric Type Tag *
+                </label>
+                <select
+                  className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition font-medium text-slate-800"
+                  value={form.fabricTag}
+                  onChange={e => setForm({ ...form, fabricTag: e.target.value })}
+                >
+                  {FABRIC_TYPES.map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
 
@@ -641,6 +1133,18 @@ export default function App() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              {/* Audience / Gender Filter */}
+              <select
+                value={selectedGenderFilter}
+                onChange={e => setSelectedGenderFilter(e.target.value)}
+                className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+              >
+                <option value="ALL">All Audiences</option>
+                <option value="WOMEN">👩 Women</option>
+                <option value="MEN">👨 Men</option>
+                <option value="UNISEX">👥 Unisex / Both</option>
+              </select>
+
               {/* Category Filter */}
               <select
                 value={selectedCategoryFilter}
@@ -650,6 +1154,16 @@ export default function App() {
                 <option value="ALL">All Categories</option>
                 <option value="ON_SALE">🔥 On Sale Only</option>
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+
+              {/* Fabric Tag Filter */}
+              <select
+                value={selectedFabricFilter}
+                onChange={e => setSelectedFabricFilter(e.target.value)}
+                className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600"
+              >
+                <option value="ALL">All Fabric Types</option>
+                {FABRIC_TYPES.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
 
               {/* SKU & Name Search Box */}
@@ -682,7 +1196,9 @@ export default function App() {
                 <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                   <th className="py-3 px-4">Item</th>
                   <th className="py-3 px-4">SKU</th>
+                  <th className="py-3 px-4">Audience</th>
                   <th className="py-3 px-4">Category</th>
+                  <th className="py-3 px-4">Fabric Tag</th>
                   <th className="py-3 px-4">Price</th>
                   <th className="py-3 px-4">Sizes &amp; Stock</th>
                   <th className="py-3 px-4">Total Qty</th>
@@ -693,13 +1209,13 @@ export default function App() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                    <td colSpan={10} className="py-8 text-center text-slate-400">
                       Loading inventory items...
                     </td>
                   </tr>
                 ) : filteredItems.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                    <td colSpan={10} className="py-8 text-center text-slate-400">
                       No products found matching your search.
                     </td>
                   </tr>
@@ -749,10 +1265,34 @@ export default function App() {
                           {item.sku}
                         </td>
 
+                        {/* Audience / Gender Badge */}
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {item.gender === 'MEN' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              👨 Men
+                            </span>
+                          ) : item.gender === 'ALL' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                              👥 Both
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              👩 Women
+                            </span>
+                          )}
+                        </td>
+
                         {/* Category */}
                         <td className="py-3 px-4">
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
                             {item.category}
+                          </span>
+                        </td>
+
+                        {/* Fabric Tag */}
+                        <td className="py-3 px-4">
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            {item.fabricTag || item.fabric || 'Lawn'}
                           </span>
                         </td>
 
