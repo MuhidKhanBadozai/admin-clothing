@@ -1,4 +1,4 @@
-export type ProductSize = 'XS' | 'S' | 'M' | 'L' | 'XL';
+export type ProductSize = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'UNSTITCHED';
 
 export interface OrderItem {
   sku: string;

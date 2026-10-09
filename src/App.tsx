@@ -420,7 +420,11 @@ export default function App() {
     images: [] as string[],
     description: '',
     isOnSale: false,
+    isUnstitched: false,
   });
+
+  // Stock for unstitched option
+  const [unstitchedStock, setUnstitchedStock] = useState<number>(0);
 
   const driveConfig = googleDriveService.getConfig();
   const isDriveConfigured = Boolean(driveConfig.scriptUrl && driveConfig.scriptUrl.trim());
@@ -498,9 +502,11 @@ export default function App() {
       images: [],
       description: '',
       isOnSale: false,
+      isUnstitched: false,
     });
     setSizesState({ XS: 0, S: 5, M: 10, L: 5, XL: 0 });
     setEnabledSizes({ XS: false, S: true, M: true, L: true, XL: false });
+    setUnstitchedStock(0);
     setEditingId(null);
   };
 
@@ -508,12 +514,20 @@ export default function App() {
     e.preventDefault();
 
     // Compute sizes array and overall quantity
-    const sizesArray: SizeStockItem[] = STANDARD_SIZES.map(sz => ({
-      size: sz,
-      stock: enabledSizes[sz] ? (Number(sizesState[sz]) || 0) : 0
-    }));
+    let sizesArray: SizeStockItem[];
+    let totalCalculatedQuantity: number;
 
-    const totalCalculatedQuantity = sizesArray.reduce((acc, curr) => acc + curr.stock, 0);
+    if (form.isUnstitched) {
+      const stock = Math.max(0, Number(unstitchedStock) || 0);
+      sizesArray = [{ size: 'UNSTITCHED', stock }];
+      totalCalculatedQuantity = stock;
+    } else {
+      sizesArray = STANDARD_SIZES.map(sz => ({
+        size: sz,
+        stock: enabledSizes[sz] ? (Number(sizesState[sz]) || 0) : 0
+      }));
+      totalCalculatedQuantity = sizesArray.reduce((acc, curr) => acc + curr.stock, 0);
+    }
 
     const validImages = form.images.length > 0
       ? form.images
@@ -532,6 +546,7 @@ export default function App() {
       images: validImages,           // full array for main site
       description: form.description.trim(),
       isOnSale: Boolean(form.isOnSale),
+      isUnstitched: Boolean(form.isUnstitched),
       sizes: sizesArray,
       updatedAt: new Date().toISOString()
     };
@@ -565,6 +580,10 @@ export default function App() {
 
     const itemGender = (item.gender || (item.category === 'MEN' ? 'MEN' : 'WOMEN')) as 'WOMEN' | 'MEN' | 'ALL';
 
+    // Detect if item is unstitched
+    const itemIsUnstitched = Boolean((item as any).isUnstitched) ||
+      (Array.isArray(item.sizes) && item.sizes.length === 1 && item.sizes[0]?.size === 'UNSTITCHED');
+
     setForm({
       name: item.name || '',
       sku: item.sku || '',
@@ -575,28 +594,37 @@ export default function App() {
       images: parsedImgs,
       description: item.description || '',
       isOnSale: Boolean(item.isOnSale),
+      isUnstitched: itemIsUnstitched,
     });
 
-    const newSizesState: { [key: string]: number } = { XS: 0, S: 0, M: 0, L: 0, XL: 0 };
-    const newEnabledSizes: { [key: string]: boolean } = { XS: false, S: false, M: false, L: false, XL: false };
-
-    if (Array.isArray(item.sizes) && item.sizes.length > 0) {
-      item.sizes.forEach((s) => {
-        if (s.size) {
-          const qty = Number(s.stock) || 0;
-          newSizesState[s.size] = qty;
-          newEnabledSizes[s.size] = qty > 0;
-        }
-      });
+    if (itemIsUnstitched) {
+      const unstitchedEntry = (item.sizes || []).find((s: any) => s.size === 'UNSTITCHED');
+      setUnstitchedStock(Number(unstitchedEntry?.stock) || 0);
+      setSizesState({ XS: 0, S: 0, M: 0, L: 0, XL: 0 });
+      setEnabledSizes({ XS: false, S: false, M: false, L: false, XL: false });
     } else {
-      // Legacy fallback
-      const total = Number(item.quantity) || 0;
-      newSizesState['M'] = total;
-      newEnabledSizes['M'] = total > 0;
-    }
+      const newSizesState: { [key: string]: number } = { XS: 0, S: 0, M: 0, L: 0, XL: 0 };
+      const newEnabledSizes: { [key: string]: boolean } = { XS: false, S: false, M: false, L: false, XL: false };
 
-    setSizesState(newSizesState);
-    setEnabledSizes(newEnabledSizes);
+      if (Array.isArray(item.sizes) && item.sizes.length > 0) {
+        item.sizes.forEach((s) => {
+          if (s.size) {
+            const qty = Number(s.stock) || 0;
+            newSizesState[s.size] = qty;
+            newEnabledSizes[s.size] = qty > 0;
+          }
+        });
+      } else {
+        // Legacy fallback
+        const total = Number(item.quantity) || 0;
+        newSizesState['M'] = total;
+        newEnabledSizes['M'] = total > 0;
+      }
+
+      setSizesState(newSizesState);
+      setEnabledSizes(newEnabledSizes);
+      setUnstitchedStock(0);
+    }
 
     // Scroll smoothly to form
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -646,10 +674,12 @@ export default function App() {
     return matchesSearch && matchesCat && matchesFabric && matchesGender;
   });
 
-  const totalCalculatedUnits = Object.entries(sizesState).reduce(
-    (acc, [sz, qty]) => acc + (enabledSizes[sz] ? (Number(qty) || 0) : 0),
-    0
-  );
+  const totalCalculatedUnits = form.isUnstitched
+    ? (Number(unstitchedStock) || 0)
+    : Object.entries(sizesState).reduce(
+        (acc, [sz, qty]) => acc + (enabledSizes[sz] ? (Number(qty) || 0) : 0),
+        0
+      );
 
   // Auth gate — after all hooks
   if (!isLoggedIn) return <LoginScreen onLogin={handleLogin} />;
@@ -989,7 +1019,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Size Availability & How Much (Requested by user) */}
+                {/* Size Availability & Stock Count */}
                 <div className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/40 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -1002,67 +1032,121 @@ export default function App() {
                       Total Units: <strong className="font-bold">{totalCalculatedUnits}</strong>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500">
-                    Click each size to enable or disable it, then set how much quantity is available for that size.
-                  </p>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-1">
-                    {STANDARD_SIZES.map(sz => {
-                      const isActive = enabledSizes[sz];
-                      const stock = sizesState[sz] ?? 0;
+                  {/* Unstitched toggle */}
+                  <div className="flex items-center gap-3 pb-1 border-b border-indigo-100">
+                    <button
+                      type="button"
+                      onClick={() => setForm(prev => ({ ...prev, isUnstitched: !prev.isUnstitched }))}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+                        form.isUnstitched ? 'bg-amber-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          form.isUnstitched ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <div>
+                      <span className={`text-xs font-bold ${form.isUnstitched ? 'text-amber-700' : 'text-slate-600'}`}>
+                        {form.isUnstitched ? '🧵 UNSTITCHED MODE — No stitching sizes needed' : 'Standard Sizes (XS – XL)'}
+                      </span>
+                      <p className="text-[11px] text-slate-400">
+                        {form.isUnstitched
+                          ? 'This is unstitched fabric/cloth. Customer will get it stitched themselves.'
+                          : 'Toggle ON if this product is unstitched fabric (no ready-to-wear sizes).'
+                        }
+                      </p>
+                    </div>
+                  </div>
 
-                      return (
-                        <div
-                          key={sz}
-                          className={`p-3 rounded-lg border transition-all ${isActive
-                            ? 'bg-white border-indigo-200 shadow-xs'
-                            : 'bg-slate-100/70 border-slate-200 opacity-60'
-                            }`}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <button
-                              type="button"
-                              onClick={() => toggleSizeActive(sz)}
-                              className={`w-7 h-7 rounded-md font-bold text-xs flex items-center justify-center transition cursor-pointer ${isActive
-                                ? 'bg-indigo-600 text-white shadow-xs'
-                                : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                  {form.isUnstitched ? (
+                    /* Unstitched: single stock input */
+                    <div className="flex items-center gap-4 pt-1">
+                      <div className="flex-1 p-3 rounded-lg border-2 border-amber-300 bg-amber-50 flex items-center justify-between">
+                        <div>
+                          <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">UNSTITCHED</span>
+                          <p className="text-[11px] text-amber-600 mt-0.5">Single option shown to customer</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] uppercase font-semibold text-slate-500">Stock:</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={unstitchedStock}
+                            onChange={e => setUnstitchedStock(Math.max(0, parseInt(e.target.value) || 0))}
+                            placeholder="0"
+                            className="w-20 px-2 py-1.5 text-sm bg-white border-2 border-amber-300 rounded-lg text-center font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Standard XS–XL size grid */
+                    <>
+                      <p className="text-xs text-slate-500">
+                        Click each size to enable or disable it, then set how much quantity is available for that size.
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-1">
+                        {STANDARD_SIZES.map(sz => {
+                          const isActive = enabledSizes[sz];
+                          const stock = sizesState[sz] ?? 0;
+
+                          return (
+                            <div
+                              key={sz}
+                              className={`p-3 rounded-lg border transition-all ${isActive
+                                ? 'bg-white border-indigo-200 shadow-xs'
+                                : 'bg-slate-100/70 border-slate-200 opacity-60'
                                 }`}
                             >
-                              {sz}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleSizeActive(sz)}
-                              className="text-[11px] text-slate-500 hover:text-slate-800"
-                            >
-                              {isActive ? (
-                                <span className="text-emerald-600 font-semibold flex items-center gap-0.5">
-                                  <Check className="w-3 h-3" /> Active
-                                </span>
-                              ) : (
-                                <span className="text-slate-400">Off</span>
-                              )}
-                            </button>
-                          </div>
+                              <div className="flex items-center justify-between mb-2">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSizeActive(sz)}
+                                  className={`w-7 h-7 rounded-md font-bold text-xs flex items-center justify-center transition cursor-pointer ${isActive
+                                    ? 'bg-indigo-600 text-white shadow-xs'
+                                    : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                                    }`}
+                                >
+                                  {sz}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSizeActive(sz)}
+                                  className="text-[11px] text-slate-500 hover:text-slate-800"
+                                >
+                                  {isActive ? (
+                                    <span className="text-emerald-600 font-semibold flex items-center gap-0.5">
+                                      <Check className="w-3 h-3" /> Active
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">Off</span>
+                                  )}
+                                </button>
+                              </div>
 
-                          <div>
-                            <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">
-                              How much:
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              disabled={!isActive}
-                              value={stock}
-                              onChange={(e) => handleSizeStockChange(sz, e.target.value)}
-                              placeholder="0"
-                              className="w-full px-2 py-1 text-sm bg-slate-50 border border-slate-200 rounded text-center font-bold text-slate-800 disabled:bg-slate-200/50 disabled:text-slate-400 focus:outline-none focus:border-indigo-600"
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                              <div>
+                                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">
+                                  How much:
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  disabled={!isActive}
+                                  value={stock}
+                                  onChange={(e) => handleSizeStockChange(sz, e.target.value)}
+                                  placeholder="0"
+                                  className="w-full px-2 py-1 text-sm bg-slate-50 border border-slate-200 rounded text-center font-bold text-slate-800 disabled:bg-slate-200/50 disabled:text-slate-400 focus:outline-none focus:border-indigo-600"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Product Description (Requested by user) */}
